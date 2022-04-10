@@ -1,0 +1,15 @@
+[Unit]
+Description=dump1090 proxy
+Documentation=https://github.com/paulcager/dump1090_proxy
+
+[Service]
+Restart=always
+User=dump1090
+EnvironmentFile=/etc/default/dump1090-proxy
+ExecStart=/usr/local/bin/dump1090-proxy $ARGS
+ExecReload=/bin/kill -HUP $MAINPID
+TimeoutStopSec=20s
+SendSIGKILL=no
+
+[Install]
+WantedBy=multi-user.target

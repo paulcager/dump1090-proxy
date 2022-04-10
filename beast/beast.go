@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 )
 
 const (
@@ -43,30 +44,28 @@ func ReadMessage(r *bufio.Reader) ([]byte, error) {
 	// in all have a known length - but we can't just read that number of
 	// bytes because of escape characters which are themselves escaped.
 
-	// The maximum sized message we are interested in
-	const maxSize = 1 + 6 + 1 + 14
-	var (
-		payloadLength int
-	)
+	// 2-byte header, 6-byte timestamp, 1 byte signal level + payload
+	// The payload can be up to twice its declared length, because escape characters may
+	// need escaping.
+	const fixedSize = 2 + 6 + 1
+	const maxSize = fixedSize + 2*14
+
+	// Read header.
+	buff := make([]byte, maxSize)
+	_, err := io.ReadFull(r, buff[:fixedSize])
+	if err != nil {
+		return nil, err
+	}
 
 	// The first byte should be a 0x1a, followed by the message type.
-	start, err := r.ReadByte()
-	if err != nil {
-		return nil, err
-	}
-	if start != esc {
+	if buff[0] != esc || buff[1] == esc {
 		return nil, InvalidMessage
 	}
 
-	mType, err := r.ReadByte()
-	if err != nil {
-		return nil, err
-	}
-
-	if mType == esc {
-		// Not a valid start of message
-		return nil, InvalidMessage
-	}
+	var (
+		mType         = buff[1]
+		payloadLength int
+	)
 
 	switch mType {
 	case '1':
@@ -80,21 +79,18 @@ func ReadMessage(r *bufio.Reader) ([]byte, error) {
 		return nil, nil
 	}
 
-	// 2-byte header, 6-byte timestamp, 1 byte signal level + payload
-	buff := make([]byte, 2+6+1+payloadLength)
-	buff[0] = esc
-	buff[1] = mType
-	i := 2
-	for i < len(buff) {
+	pos := fixedSize
+	for i := 0; i < payloadLength; i++ {
 		b, err := r.ReadByte()
 		if err != nil {
 			return nil, err
 		}
 
-		buff[i] = b
-		i++
+		buff[pos] = b
+		pos++
 
 		if b == esc {
+			// Sould be followed by an escape
 			b, err := r.ReadByte()
 			if err != nil {
 				return nil, err
@@ -102,9 +98,10 @@ func ReadMessage(r *bufio.Reader) ([]byte, error) {
 			if b != esc {
 				return nil, fmt.Errorf("unescaped escape %c after %s", b, hex.Dump(buff[:i]))
 			}
+			buff[pos] = b
+			pos++
 		}
 	}
 
-	//fmt.Println(hex.Dump(buff))
-	return buff, err
+	return buff[:pos], err
 }
