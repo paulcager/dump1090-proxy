@@ -69,6 +69,29 @@ func TestTimestampContainsEsc(t *testing.T) {
 	assert.Equal(t, 3, len(msgs))
 }
 
+func TestFailsInLive(t *testing.T) {
+	b, err := hex.DecodeString(
+		"" +
+			"1a320003865d38585902e19910bc5f6a" +
+			"1a330003865d847f58a8000bbdca3e51f0a800002a54da" +
+			"1a320003865e7c3b5b5da4b827553f2b" +
+			"1a320003865ec0745c5da4b827553f2b" +
+			"1a330003865ed5f42a8d4ca76f990da306700447f29556")
+	noError(t, err)
+	r := bufio.NewReader(bytes.NewReader(b))
+	var msgs [][]byte
+	for {
+		msg, err := ReadMessage(r)
+		if err == io.EOF {
+			break
+		}
+		noError(t, err)
+		msgs = append(msgs, msg)
+	}
+
+	assert.Equal(t, 4, len(msgs))
+}
+
 func str(s string) []byte {
 	return []byte(strings.ReplaceAll(s, "^", "\x1a"))
 }

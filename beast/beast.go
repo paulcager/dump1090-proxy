@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 )
 
 const (
@@ -78,6 +79,8 @@ func ReadMessage(r *bufio.Reader) ([]byte, error) {
 	case '3':
 		payloadLength = 14
 	default:
+		// TODO - use logging.
+		fmt.Fprintf(os.Stderr, "Unexpected mType: %d", mType)
 		// Something weird going on, maybe a new message type whose length we don't know.
 		return nil, nil
 	}
