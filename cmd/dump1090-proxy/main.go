@@ -7,6 +7,7 @@ import (
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
+	"io"
 	"net"
 	"os"
 	"time"
@@ -90,6 +91,7 @@ func runRemote(logger log.Logger, addr *net.TCPAddr, ch chan<- []byte) {
 	backoff := time.Duration(0)
 	for {
 		time.Sleep(backoff)
+		level.Info(logger).Log("addr", addr, "action", "connecting")
 		conn, err := net.DialTCP("tcp", nil, addr)
 		if err != nil {
 			level.Error(logger).Log("addr", addr, "err", err)
@@ -101,6 +103,7 @@ func runRemote(logger log.Logger, addr *net.TCPAddr, ch chan<- []byte) {
 			continue
 		}
 
+		level.Info(logger).Log("addr", addr, "action", "connected")
 		runConnection(logger, conn, ch)
 	}
 }
@@ -108,14 +111,21 @@ func runRemote(logger log.Logger, addr *net.TCPAddr, ch chan<- []byte) {
 func runConnection(logger log.Logger, conn *net.TCPConn, ch chan<- []byte) {
 
 	defer conn.Close()
+	defer level.Warn(logger).Log("addr", conn.RemoteAddr().String(), "action", "disconnected")
 
 	conn.CloseWrite()
 
-	r := bufio.NewReader(conn)
+	var r io.Reader = conn
+	if *dumpMessages {
+		r = NewLoggingReader(r, os.Stderr)
+	}
+
+	br := bufio.NewReader(r)
+
 	seenFirstMessage := false
 	for {
-		b, err := beast.ReadMessage(r)
-		if err == beast.InvalidMessage {
+		b, err := beast.ReadMessage(br)
+		if err, ok := err.(beast.InvalidMessage); ok {
 			// Don't log warning if we have just connected - may get partial messages.
 			if seenFirstMessage {
 				level.Warn(logger).Log("err", err)
@@ -128,6 +138,10 @@ func runConnection(logger log.Logger, conn *net.TCPConn, ch chan<- []byte) {
 		if err != nil {
 			ioError(logger, conn.RemoteAddr(), "read", err)
 			break
+		}
+
+		if !seenFirstMessage {
+			level.Info(logger).Log("addr", conn.RemoteAddr().String(), "action", "seenFirstMessage")
 		}
 
 		seenFirstMessage = true

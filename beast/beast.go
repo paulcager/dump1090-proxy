@@ -14,7 +14,6 @@ package beast
 import (
 	"bufio"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 )
@@ -29,9 +28,13 @@ const (
 //	Data        []byte
 //}
 
-var (
-	InvalidMessage = errors.New("unexpected start of message")
-)
+type InvalidMessage struct {
+	Header []byte
+}
+
+func (im InvalidMessage) Error() string {
+	return fmt.Sprintf("unexpected start of message at hex(%s)", hex.EncodeToString(im.Header))
+}
 
 func ReadMessage(r *bufio.Reader) ([]byte, error) {
 	// We can't just forward bytes from all connections since we might
@@ -47,8 +50,8 @@ func ReadMessage(r *bufio.Reader) ([]byte, error) {
 	// 2-byte header, 6-byte timestamp, 1 byte signal level + payload
 	// The payload can be up to twice its declared length, because escape characters may
 	// need escaping.
-	const fixedSize = 2 + 6 + 1
-	const maxSize = fixedSize + 2*14
+	const fixedSize = 2
+	const maxSize = fixedSize + 2*(6+1+14)
 
 	// Read header.
 	buff := make([]byte, maxSize)
@@ -59,7 +62,7 @@ func ReadMessage(r *bufio.Reader) ([]byte, error) {
 
 	// The first byte should be a 0x1a, followed by the message type.
 	if buff[0] != esc || buff[1] == esc {
-		return nil, InvalidMessage
+		return nil, InvalidMessage{Header: buff[:fixedSize]}
 	}
 
 	var (
@@ -80,7 +83,7 @@ func ReadMessage(r *bufio.Reader) ([]byte, error) {
 	}
 
 	pos := fixedSize
-	for i := 0; i < payloadLength; i++ {
+	for i := 0; i < 6+1+payloadLength; i++ {
 		b, err := r.ReadByte()
 		if err != nil {
 			return nil, err
@@ -90,13 +93,13 @@ func ReadMessage(r *bufio.Reader) ([]byte, error) {
 		pos++
 
 		if b == esc {
-			// Sould be followed by an escape
+			// Should be followed by an escape
 			b, err := r.ReadByte()
 			if err != nil {
 				return nil, err
 			}
 			if b != esc {
-				return nil, fmt.Errorf("unescaped escape %c after %s", b, hex.Dump(buff[:i]))
+				return nil, fmt.Errorf("unescaped escape %c after %s", b, hex.Dump(buff[:pos]))
 			}
 			buff[pos] = b
 			pos++
