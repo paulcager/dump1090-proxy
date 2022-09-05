@@ -89,7 +89,7 @@ func TestFailsInLive(t *testing.T) {
 		msgs = append(msgs, msg)
 	}
 
-	assert.Equal(t, 4, len(msgs))
+	assert.Equal(t, 5, len(msgs))
 }
 
 func str(s string) []byte {

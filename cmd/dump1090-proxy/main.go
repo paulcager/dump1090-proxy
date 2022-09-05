@@ -2,21 +2,59 @@ package main
 
 import (
 	"bufio"
-	"dump1090-proxy/beast"
 	"encoding/hex"
-	"github.com/go-kit/log"
-	"github.com/go-kit/log/level"
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"time"
+
+	"dump1090-proxy/beast"
+	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
 var (
-	listenAddress = kingpin.Flag("listen-address", "Listen address").Default("localhost:30005").String()
-	remotes       = kingpin.Flag("remote", "Remote server(s) to connect to").Required().TCPList()
-	dumpMessages  = kingpin.Flag("dumpMessages", "Hex-dump all messages").Bool()
+	listenAddress          = kingpin.Flag("listen-address", "Listen address").Default("localhost:30005").String()
+	remotes                = kingpin.Flag("remote", "Remote server(s) to connect to").Required().TCPList()
+	dumpMessages           = kingpin.Flag("dumpMessages", "Hex-dump all messages").Bool()
+	webListenAddress       = kingpin.Flag("web.listen-address", "Address on which to expose metrics.").Default(":9798").String()
+	metricsEndpoint        = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
+	disableExporterMetrics = kingpin.Flag(
+		"web.disable-exporter-metrics",
+		"TODO - not implemented. Exclude standard runtime metrics (promhttp_*, process_*, go_*).",
+	).Bool()
+)
+
+// Metrics
+var (
+	messagesRead = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "messages_read",
+		Help: "The total number of dump1090 messages read from source",
+	})
+	messagesWritten = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "messages_written",
+		Help: "The total number of dump1090 messages written to clients",
+	})
+	inboundConnections = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "inbound_connections_total",
+		Help: "Total number of inbound connections",
+	})
+	outboundConnections = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "outbound_connections_total",
+		Help: "Total number of outbound connections",
+	})
+	ioErrorCounter = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ioerrors_total",
+			Help: `Total IO errors`,
+		},
+		[]string{"op"},
+	)
 )
 
 func main() {
@@ -32,7 +70,16 @@ func main() {
 		panic(err)
 	}
 
+	go metricServer()
 	runProxy(logger, []*net.TCPListener{listener.(*net.TCPListener)}, *remotes)
+}
+
+func metricServer() {
+	http.Handle(*metricsEndpoint, promhttp.Handler())
+	err := http.ListenAndServe(*webListenAddress, nil)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func runProxy(logger log.Logger, listeners []*net.TCPListener, remotes []*net.TCPAddr) {
@@ -67,7 +114,9 @@ func runProxy(logger log.Logger, listeners []*net.TCPListener, remotes []*net.TC
 					ioError(logger, c.RemoteAddr(), "write", err)
 					delete(clients, c)
 					c.Close()
+					continue
 				}
+				messagesWritten.Inc()
 			}
 		}
 	}
@@ -83,6 +132,7 @@ func runListener(logger log.Logger, l *net.TCPListener, ch chan<- *net.TCPConn) 
 			continue
 		}
 
+		inboundConnections.Inc()
 		ch <- conn
 	}
 }
@@ -103,12 +153,14 @@ func runRemote(logger log.Logger, addr *net.TCPAddr, ch chan<- []byte) {
 			continue
 		}
 
+		outboundConnections.Inc()
 		level.Info(logger).Log("addr", addr, "action", "connected")
-		runConnection(logger, conn, ch)
+		backoff = time.Duration(0)
+		runRemoteConnection(logger, conn, ch)
 	}
 }
 
-func runConnection(logger log.Logger, conn *net.TCPConn, ch chan<- []byte) {
+func runRemoteConnection(logger log.Logger, conn *net.TCPConn, ch chan<- []byte) {
 
 	defer conn.Close()
 	defer level.Warn(logger).Log("addr", conn.RemoteAddr().String(), "action", "disconnected")
@@ -145,11 +197,14 @@ func runConnection(logger log.Logger, conn *net.TCPConn, ch chan<- []byte) {
 		}
 
 		seenFirstMessage = true
-
+		messagesRead.Inc()
 		ch <- b
 	}
 }
 
 func ioError(logger log.Logger, addr interface{}, op string, err error) {
 	level.Error(logger).Log("addr", addr, "op", op, "err", err)
+	ioErrorCounter.With(prometheus.Labels{
+		"op": op,
+	}).Inc()
 }
