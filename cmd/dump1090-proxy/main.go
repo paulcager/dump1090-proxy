@@ -40,13 +40,13 @@ var (
 		Name: "messages_written",
 		Help: "The total number of dump1090 messages written to clients",
 	})
-	inboundConnections = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "inbound_connections_total",
-		Help: "Total number of inbound connections",
+	inboundConnections = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "inbound_connections",
+		Help: "Number of inbound connections",
 	})
-	outboundConnections = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "outbound_connections_total",
-		Help: "Total number of outbound connections",
+	outboundConnections = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "outbound_connections",
+		Help: "Number of outbound connections",
 	})
 	ioErrorCounter = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -107,6 +107,7 @@ func runProxy(logger log.Logger, listeners []*net.TCPListener, remotes []*net.TC
 			if *dumpMessages {
 				level.Debug(logger).Log("message", hex.EncodeToString(m))
 			}
+			
 			for c := range clients {
 				c.SetDeadline(time.Now().Add(2 * time.Second))
 				_, err := c.Write(m)
@@ -116,9 +117,12 @@ func runProxy(logger log.Logger, listeners []*net.TCPListener, remotes []*net.TC
 					c.Close()
 					continue
 				}
-				messagesWritten.Inc()
 			}
+
+			messagesWritten.Inc()
 		}
+
+		inboundConnections.Set(float64(len(clients)))
 	}
 }
 
@@ -132,7 +136,6 @@ func runListener(logger log.Logger, l *net.TCPListener, ch chan<- *net.TCPConn) 
 			continue
 		}
 
-		inboundConnections.Inc()
 		ch <- conn
 	}
 }
@@ -153,7 +156,6 @@ func runRemote(logger log.Logger, addr *net.TCPAddr, ch chan<- []byte) {
 			continue
 		}
 
-		outboundConnections.Inc()
 		level.Info(logger).Log("addr", addr, "action", "connected")
 		backoff = time.Duration(0)
 		runRemoteConnection(logger, conn, ch)
@@ -164,6 +166,9 @@ func runRemoteConnection(logger log.Logger, conn *net.TCPConn, ch chan<- []byte)
 
 	defer conn.Close()
 	defer level.Warn(logger).Log("addr", conn.RemoteAddr().String(), "action", "disconnected")
+
+	outboundConnections.Inc()
+	defer outboundConnections.Dec()
 
 	conn.CloseWrite()
 
