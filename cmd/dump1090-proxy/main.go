@@ -98,7 +98,7 @@ func runProxy(logger log.Logger, listeners []*net.TCPListener, remotes []*net.TC
 	for {
 		select {
 		case c := <-newConnection:
-			level.Info(logger).Log("New conn", c.RemoteAddr())
+			level.Info(logger).Log("new_conn", c.RemoteAddr())
 			clients[c] = struct{}{}
 			c.CloseRead()
 			c.SetKeepAlive(true)
@@ -107,9 +107,9 @@ func runProxy(logger log.Logger, listeners []*net.TCPListener, remotes []*net.TC
 			if *dumpMessages {
 				level.Debug(logger).Log("message", hex.EncodeToString(m))
 			}
-			
+
 			for c := range clients {
-				c.SetDeadline(time.Now().Add(2 * time.Second))
+				c.SetWriteDeadline(time.Now().Add(2 * time.Second))
 				_, err := c.Write(m)
 				if err != nil {
 					ioError(logger, c.RemoteAddr(), "write", err)
@@ -142,12 +142,22 @@ func runListener(logger log.Logger, l *net.TCPListener, ch chan<- *net.TCPConn) 
 
 func runRemote(logger log.Logger, addr *net.TCPAddr, ch chan<- []byte) {
 	backoff := time.Duration(0)
+	lastErrorLog := time.Time{}
+
 	for {
 		time.Sleep(backoff)
-		level.Info(logger).Log("addr", addr, "action", "connecting")
+
+		if time.Now().After(lastErrorLog.Add(time.Hour)) {
+			level.Info(logger).Log("addr", addr, "action", "connecting")
+		}
+
 		conn, err := net.DialTCP("tcp", nil, addr)
 		if err != nil {
-			level.Error(logger).Log("addr", addr, "err", err)
+			if time.Now().After(lastErrorLog.Add(time.Hour)) {
+				level.Error(logger).Log("addr", addr, "err", err)
+				lastErrorLog = time.Now()
+			}
+
 			backoff = (time.Second + backoff) * 2
 			if backoff > time.Minute {
 				backoff = time.Minute
@@ -171,6 +181,8 @@ func runRemoteConnection(logger log.Logger, conn *net.TCPConn, ch chan<- []byte)
 	defer outboundConnections.Dec()
 
 	conn.CloseWrite()
+	conn.SetKeepAlive(true)
+	conn.SetKeepAlivePeriod(time.Minute)
 
 	var r io.Reader = conn
 	if *dumpMessages {
