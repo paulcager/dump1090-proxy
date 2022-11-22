@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"math"
 	"net"
@@ -11,7 +10,6 @@ import (
 	"dump1090-proxy/sbs"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
-	_ "github.com/mattn/go-sqlite3"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
 
@@ -25,6 +23,12 @@ var (
 	).Bool()
 
 	logger log.Logger
+
+	writers = []Writer{
+		// We just want the flat file for now.
+		// &DbWriter{},
+		&FileWriter{},
+	}
 )
 
 func main() {
@@ -37,7 +41,7 @@ func main() {
 
 	ch := make(chan sbs.Message, 32)
 
-	go dbWriter(ch)
+	go writer(ch)
 	consume(*address, ch)
 }
 
@@ -101,10 +105,19 @@ func runConnection(conn *net.TCPConn, ch chan<- sbs.Message) {
 	}
 }
 
-func dbWriter(ch <-chan sbs.Message) {
+var (
+	nextRotate time.Time
+)
+
+func writer(ch <-chan sbs.Message) {
 	count := 0
 
-	defer closeDb()
+	defer func() {
+		for _, w := range writers {
+			w.Close()
+		}
+	}()
+
 	for m := range ch {
 		if math.IsNaN(m.Latitude) || math.IsNaN(m.Longitude) {
 			continue
@@ -115,67 +128,22 @@ func dbWriter(ch <-chan sbs.Message) {
 			fmt.Println(count, int(m.Type), m.Timestamp, m.HexIdent, m.Latitude, m.Longitude, m.Altitude)
 		}
 
-		err := writeToDb(m)
-		if err != nil {
-			// Almost certainly unrecoverable.
-			panic(err)
+		if nextRotate.IsZero() || m.Timestamp.After(nextRotate) {
+			// Need to rotate files
+			for _, w := range writers {
+				if err := w.Rotate(m.Timestamp); err != nil {
+					panic(err)
+				}
+			}
+			nextRotate = m.Timestamp.Truncate(24 * time.Hour).Add(24 * time.Hour)
+		}
+
+		for _, w := range writers {
+			err := w.Write(m)
+			if err != nil {
+				// Almost certainly unrecoverable.
+				panic(err)
+			}
 		}
 	}
-}
-
-var (
-	db         *sql.DB
-	stmt       *sql.Stmt
-	nextRotate time.Time
-)
-
-func writeToDb(m sbs.Message) error {
-	if nextRotate.IsZero() || m.Timestamp.After(nextRotate) {
-		// Need to rotate DB
-		closeDb()
-
-		nextRotate = m.Timestamp.Truncate(24 * time.Hour).Add(24 * time.Hour)
-		fileName := "./dump1090-" + m.Timestamp.Format("2006-01-02") + ".db"
-		level.Info(logger).Log("rotating", fileName)
-		if err := createDb(fileName); err != nil {
-			return err
-		}
-	}
-
-	_, err := stmt.Exec(int(m.Type), m.Timestamp, m.HexIdent, m.Latitude, m.Longitude, m.Altitude)
-	return err
-}
-
-func closeDb() {
-	if stmt != nil {
-		stmt.Close()
-	}
-	if db != nil {
-		db.Close()
-	}
-
-	stmt = nil
-	db = nil
-}
-
-func createDb(name string) error {
-	var err error
-	db, err = sql.Open("sqlite3", name)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.Exec(`
-			create table messages(type integer, timestamp text, hexIdent text, lat float64, lon float64, alt float64)
-		`)
-
-	if err != nil {
-		return err
-	}
-
-	stmt, err = db.Prepare(`
-			insert into messages(type, timestamp , hexIdent, lat, lon, alt)
-			values(?, strftime('%Y-%m-%d %H:%M:%f', ?), ?, ?, ?, ?)`)
-
-	return err
 }
