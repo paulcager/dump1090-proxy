@@ -15,12 +15,17 @@ import (
 type Writer interface {
 	Write(m sbs.Message) error
 	Rotate(timestamp time.Time) error
+	Flush()
 	Close() error
 }
 
 type DbWriter struct {
 	db   *sql.DB
 	stmt *sql.Stmt
+}
+
+func (db *DbWriter) Flush() {
+	// No action needed
 }
 
 func (db *DbWriter) Write(m sbs.Message) error {
@@ -72,10 +77,14 @@ type FileWriter struct {
 	c    *csv.Writer
 }
 
-func (db *FileWriter) Write(m sbs.Message) error {
-	err := db.c.Write([]string{
+func (fw *FileWriter) Flush() {
+	fw.c.Flush()
+}
+
+func (fw *FileWriter) Write(m sbs.Message) error {
+	err := fw.c.Write([]string{
 		fmt.Sprint(int(m.Type)),
-		m.Timestamp.Format("2006-01-02T15:04:05"),
+		m.Timestamp.Format("2006-01-02T15:04:05.000"),
 		m.HexIdent,
 		fmt.Sprint(m.Latitude),
 		fmt.Sprint(m.Longitude),
@@ -84,30 +93,30 @@ func (db *FileWriter) Write(m sbs.Message) error {
 	return err
 }
 
-func (db *FileWriter) Rotate(timestamp time.Time) error {
-	_ = db.Close()
+func (fw *FileWriter) Rotate(timestamp time.Time) error {
+	_ = fw.Close()
 
 	fileName := "./dump1090-" + timestamp.Format("2006-01-02") + ".csv"
 	level.Info(logger).Log("rotating", fileName)
 
 	var err error
-	db.file, err = os.OpenFile(fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+	fw.file, err = os.OpenFile(fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
 	if err != nil {
 		return err
 	}
 
-	db.c = csv.NewWriter(db.file)
+	fw.c = csv.NewWriter(fw.file)
 
 	return nil
 }
 
-func (db *FileWriter) Close() error {
-	if db.c != nil {
-		db.c.Flush()
+func (fw *FileWriter) Close() error {
+	if fw.c != nil {
+		fw.c.Flush()
 	}
 
-	if db.file != nil {
-		return db.file.Close()
+	if fw.file != nil {
+		return fw.file.Close()
 	}
 
 	return nil

@@ -118,31 +118,42 @@ func writer(ch <-chan sbs.Message) {
 		}
 	}()
 
-	for m := range ch {
-		if math.IsNaN(m.Latitude) || math.IsNaN(m.Longitude) {
-			continue
-		}
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 
-		count++
-		if count%1000 == 0 {
-			fmt.Println(count, int(m.Type), m.Timestamp, m.HexIdent, m.Latitude, m.Longitude, m.Altitude)
-		}
-
-		if nextRotate.IsZero() || m.Timestamp.After(nextRotate) {
-			// Need to rotate files
+	for {
+		select {
+		case <-ticker.C:
 			for _, w := range writers {
-				if err := w.Rotate(m.Timestamp); err != nil {
+				w.Flush()
+			}
+
+		case m := <-ch:
+			if math.IsNaN(m.Latitude) || math.IsNaN(m.Longitude) {
+				continue
+			}
+
+			count++
+			if count%1000 == 0 {
+				fmt.Println(count, int(m.Type), m.Timestamp, m.HexIdent, m.Latitude, m.Longitude, m.Altitude)
+			}
+
+			if nextRotate.IsZero() || m.Timestamp.After(nextRotate) {
+				// Need to rotate files
+				for _, w := range writers {
+					if err := w.Rotate(m.Timestamp); err != nil {
+						panic(err)
+					}
+				}
+				nextRotate = m.Timestamp.Truncate(24 * time.Hour).Add(24 * time.Hour)
+			}
+
+			for _, w := range writers {
+				err := w.Write(m)
+				if err != nil {
+					// Almost certainly unrecoverable.
 					panic(err)
 				}
-			}
-			nextRotate = m.Timestamp.Truncate(24 * time.Hour).Add(24 * time.Hour)
-		}
-
-		for _, w := range writers {
-			err := w.Write(m)
-			if err != nil {
-				// Almost certainly unrecoverable.
-				panic(err)
 			}
 		}
 	}
