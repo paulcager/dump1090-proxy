@@ -13,5 +13,6 @@ COPY --from=build /dump1090_proxy ./
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 EXPOSE 9799
-CMD ["/app/dump1090_proxy", "--remote=pi-zero-flights.paulcager.org:30005", "--remote=pi-zero-flights-2.paulcager.org:30005"]
+EXPOSE 30005
+CMD ["/app/dump1090_proxy", "--listen-address=0.0.0.0:30005", "--remote=pi-zero-flights.paulcager.org:30005", "--remote=pi-zero-flights-2.paulcager.org:30005"]
 
