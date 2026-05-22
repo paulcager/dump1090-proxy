@@ -180,7 +180,6 @@ func runRemoteConnection(logger log.Logger, conn *net.TCPConn, ch chan<- []byte)
 	outboundConnections.Inc()
 	defer outboundConnections.Dec()
 
-	conn.CloseWrite()
 	conn.SetKeepAlive(true)
 	conn.SetKeepAlivePeriod(time.Minute)
 
